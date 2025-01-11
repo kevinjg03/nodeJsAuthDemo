@@ -1,0 +1,430 @@
+
+********************************************************************
+
+run npm init
+
+********************************************************************
+
+create a folder named v1 inside project
+Agregar al package json 
+"type": "module",      //  Para usar imports en lugar de require
+"dev": "nodemon v1/server.js"
+
+********************************************************************
+correr
+npm install express mongoose bcrypt cookie-parser dotenv cors express-validator jsonwebtoken
+npm install --save-dev nodemon. (To install Nodemon as dev dependency)
+
+
+********************************************************************
+Crear carpeta routes
+Crear carpeta config
+
+
+********************************************************************
+Crear archivo index.js en Router
+const Router = (server) => {
+// home route with the get method and a handler
+server.get("/v1", (req, res) => {
+    try {
+        res.status(200).json({
+            status: "success",
+            data: [],
+            message: "Welcome to our API homepage!",
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: "error",
+            message: "Internal Server Error",
+        });
+    }
+})
+};
+export default Router;
+
+********************************************************************
+Ir a mongo atlas y crear usuario, para acceder,
+Tomar el url del driver de node
+
+
+********************************************************************
+crear un .env con:
+#DATABASE_STRING
+URI=mongodb+srv://kevinjg03:Cenfotec1234@testcluster.yq3jodx.mongodb.net/?retryWrites=true&w=majority&appName=TestCluster
+#SERVER_PORT
+PORT=5005
+#TOKEN
+SECRET_ACCESS_TOKEN=xxxxx
+
+
+********************************************************************
+crear un archivo index.js en config
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+const { URI, PORT, SECRET_ACCESS_TOKEN } = process.env;
+
+export { URI, PORT, SECRET_ACCESS_TOKEN };
+
+********************************************************************
+
+crear un archivo server.js en v1
+
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import mongoose from "mongoose";
+import { PORT, URI } from "./config/index.js";
+import Router from "./routes/index.js";
+
+// === 1 - CREATE SERVER ===
+const server = express();
+
+// CONFIGURE HEADER INFORMATION
+// Allow request from any source. In real production, this should be limited to allowed origins only
+server.use(cors());
+server.disable("x-powered-by"); //Reduce fingerprinting
+server.use(cookieParser());
+server.use(express.urlencoded({ extended: false }));
+server.use(express.json());
+
+// === 2 - CONNECT DATABASE ===
+// Set up mongoose's promise to global promise
+mongoose.promise = global.Promise;
+mongoose.set("strictQuery", false);
+mongoose
+    .connect(URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+    })
+    .then(console.log("Connected to database"))
+    .catch((err) => console.log(err));
+
+// === 4 - CONFIGURE ROUTES ===
+// Connect Route handler to server
+Router(server);
+
+// === 5 - START UP SERVER ===
+server.listen(PORT, () =>
+    console.log(`Server running on http://localhost:${PORT}`)
+);
+
+
+********************************************************************
+Correr el server con npm run dev
+
+********************************************************************
+
+Create User model 
+
+import mongoose from "mongoose";
+import bcrypt from "bcrypt";
+
+const UserSchema = new mongoose.Schema(
+    {
+        first_name: {
+            type: String,
+            required: "Your firstname is required",
+            max: 25,
+        },
+        last_name: {
+            type: String,
+            required: "Your lastname is required",
+            max: 25,
+        },
+        email: {
+            type: String,
+            required: "Your email is required",
+            unique: true,
+            lowercase: true,
+            trim: true,
+        },
+        password: {
+            type: String,
+            required: "Your password is required",
+            select: false,
+            max: 25,
+        },
+        role: {
+            type: String,
+            required: true,
+            default: "0x01",
+        },
+    },
+    { timestamps: true }
+);
+
+UserSchema.pre("save", function (next) {
+    const user = this;
+
+    if (!user.isModified("password")) return next();
+    bcrypt.genSalt(10, (err, salt) => {
+        if (err) return next(err);
+
+        bcrypt.hash(user.password, salt, (err, hash) => {
+            if (err) return next(err);
+
+            user.password = hash;
+            next();
+        });
+    });
+});
+
+export default mongoose.model("users", UserSchema);
+
+********************************************************************
+
+Create a middleware folder and validate.js
+
+import { validationResult } from "express-validator";
+
+const Validate = (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        let error = {};
+        errors.array().map((err) => (error[err.param] = err.msg));
+        return res.status(422).json({ error });
+    }
+    next();
+};
+export default Validate;
+
+
+********************************************************************
+Create a controllers folder and an auth.js file inside
+
+import User from "../models/User.js";
+
+/**
+ * @route POST v1/auth/register
+ * @desc Registers a user
+ * @access Public
+ */
+export async function Register(req, res) {
+    // get required variables from request body
+    // using es6 object destructing
+    const { first_name, last_name, email, password } = req.body;
+    try {
+        // create an instance of a user
+        const newUser = new User({
+            first_name,
+            last_name,
+            email,
+            password,
+        });
+        // Check if user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser)
+            return res.status(400).json({
+                status: "failed",
+                data: [],
+                message: "It seems you already have an account, please log in instead.",
+            });
+        const savedUser = await newUser.save(); // save new user into the database
+        const { role, ...user_data } = savedUser._doc;
+        res.status(200).json({
+            status: "success",
+            data: [user_data],
+            message:
+                "Thank you for registering with us. Your account has been successfully created.",
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: "error",
+            code: 500,
+            data: [],
+            message: "Internal Server Error",
+        });
+    }
+    res.end();
+}
+********************************************************************
+Now register the route for auth in routecreating an auth.js inside folder
+
+import express from "express";
+import { Register } from "../controllers/auth.js";
+import Validate from "../middleware/validate.js";
+import { check } from "express-validator";
+
+const router = express.Router();
+
+// Register route -- POST request
+router.post(
+    "/register",
+    check("email")
+        .isEmail()
+        .withMessage("Enter a valid email address")
+        .normalizeEmail(),
+    check("first_name")
+        .not()
+        .isEmpty()
+        .withMessage("You first name is required")
+        .trim()
+        .escape(),
+    check("last_name")
+        .not()
+        .isEmpty()
+        .withMessage("You last name is required")
+        .trim()
+        .escape(),
+    check("password")
+        .notEmpty()
+        .isLength({ min: 8 })
+        .withMessage("Must be at least 8 chars long"),
+    Validate,
+    Register
+);
+
+export default router;
+
+
+********************************************************************
+Create Login function inside controllers auth.js
+
+add import bcrypt from "bcrypt";
+
+
+export async function Login(req, res) {
+    // Get variables for the login process
+    const { email } = req.body;
+    try {
+        // Check if user exists
+        const user = await User.findOne({ email }).select("+password");
+        if (!user)
+            return res.status(401).json({
+                status: "failed",
+                data: [],
+                message:
+                    "Invalid email or password. Please try again with the correct credentials.",
+            });
+        // if user exists
+        // validate password
+        const isPasswordValid = await bcrypt.compare(
+            `${req.body.password}`,
+            user.password
+        );
+        // if not valid, return unathorized response
+        if (!isPasswordValid)
+            return res.status(401).json({
+                status: "failed",
+                data: [],
+                message:
+                    "Invalid email or password. Please try again with the correct credentials.",
+            });
+        // return user info except password
+        const { password, ...user_data } = user._doc;
+
+        res.status(200).json({
+            status: "success",
+            data: [user_data],
+            message: "You have successfully logged in.",
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: "error",
+            code: 500,
+            data: [],
+            message: "Internal Server Error",
+        });
+    }
+    res.end();
+}
+
+********************************************************************
+
+Add login routes to routes/auth.js
+
+// Login route == POST request
+router.post(
+    "/login",
+    check("email")
+        .isEmail()
+        .withMessage("Enter a valid email address")
+        .normalizeEmail(),
+    check("password").not().isEmpty(),
+    Validate,
+    Login
+);
+
+********************************************************************
+Add session to login
+
+type node in terminal
+type
+crypto.randomBytes(20).toString(‘hex’)
+
+require('crypto').randomBytes(20).toString('hex')
+
+
+copy the code and paste it inside the .env on SECRET_ACCESS_TOKEN
+********************************************************************
+Add to user Schema
+
+
+import jwt from 'jsonwebtoken';
+import { SECRET_ACCESS_TOKEN } from '../config/index.js';
+
+
+UserSchema.methods.generateAccessJWT = function () {
+  let payload = {
+    id: this._id,
+  };
+  return jwt.sign(payload, SECRET_ACCESS_TOKEN, {
+    expiresIn: '20m',
+  });
+};
+
+********************************************************************
+Add token logic to login controller function
+
+export async function Login(req, res) {
+    // Get variables for the login process
+    const { email } = req.body;
+    try {
+        // Check if user exists
+        const user = await User.findOne({ email }).select("+password");
+        if (!user)
+            return res.status(401).json({
+                status: "failed",
+                data: [],
+                message: "Account does not exist",
+            });
+        // if user exists
+        // validate password
+        const isPasswordValid = await bcrypt.compare(
+            `${req.body.password}`,
+            user.password
+        );
+        // if not valid, return unathorized response
+        if (!isPasswordValid)
+            return res.status(401).json({
+                status: "failed",
+                data: [],
+                message:
+                    "Invalid email or password. Please try again with the correct credentials.",
+            });
+
+        let options = {
+            maxAge: 20 * 60 * 1000, // would expire in 20minutes
+            httpOnly: true, // The cookie is only accessible by the web server
+            secure: true,
+            sameSite: "None",
+        };
+        const token = user.generateAccessJWT(); // generate session token for user
+        res.cookie("SessionID", token, options); // set the token to response header, so that the client sends it back on each subsequent request
+        res.status(200).json({
+            status: "success",
+            message: "You have successfully logged in.",
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: "error",
+            code: 500,
+            data: [],
+            message: "Internal Server Error",
+        });
+    }
+    res.end();
+}
+
+********************************************************************
